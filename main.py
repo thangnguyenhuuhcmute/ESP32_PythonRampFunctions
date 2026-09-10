@@ -32,7 +32,7 @@ MIN_POS_MM = 0
 
 PULSE_US = 10
 PERIOD_US = 100   # 10 kHz
-DEFAULT_SPEED_MM_S = 120
+DEFAULT_SPEED_MM_S = 75
 
 
 # -----------------------------
@@ -85,7 +85,7 @@ solenoid_done = False
 
 # Default values
 
-POS1 = 0
+POS1 = 5
 POS2 = 150
 POS3 = 300
 POS4 = 450
@@ -493,7 +493,7 @@ def activate_solenoid():
     if detected:
         #  WAIT EXTRA 5s
         print("Holding 5s...")
-        time.sleep(5)
+        time.sleep(2)
 
     else:
         #  ERROR
@@ -517,7 +517,7 @@ def home_axis():
         motor_reset()
 
     if home.value() == 0:
-        jog_start(positive_dir)   # positive direction
+        jog_start(positive_dir,30)   # positive direction
     while home.value() == 0:   # still pressing switch
         pass
     jog_stop()
@@ -652,6 +652,7 @@ def state_machine():
     elif current_pos == 6:
         if c1:
             move_to_mm(POS1)
+            home_axis()
             current_pos = 1
             wait_release()
 
