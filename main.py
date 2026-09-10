@@ -5,6 +5,7 @@ import _thread
 import network
 import socket
 import json
+import math
 
 #OUTPUT
 
@@ -32,7 +33,14 @@ MIN_POS_MM = 0
 
 PULSE_US = 10
 PERIOD_US = 100   # 10 kHz
-DEFAULT_SPEED_MM_S = 120
+DEFAULT_SPEED_MM_S = 75
+
+# -----------------------------
+# MOTION PROFILE (RAMP) CONFIG
+# -----------------------------
+START_SPEED_MM_S = 8       # mm/s  - ramp-up/down start at this speed (always keep > 0)
+ACCEL_MM_S2      = 1000    # mm/s^2 - acceleration, increase to faster and decrease to slower
+RAMP_SEGMENTS    = 24      # the number of speed on each ramp range (higher to smoother)
 
 
 # -----------------------------
@@ -418,19 +426,13 @@ def motor_reset():
     time.sleep_ms(500)
     en_pin.value(1)
     time.sleep_ms(1500)
-def move_steps(steps, direction, speed_mm_s=DEFAULT_SPEED_MM_S):
-
-    global position_steps
-
+def _pulse_block(steps, speed_mm_s):
+    # Generate steps pulses at constant speed.
+    # Direction need to set before call the definition.
     if steps <= 0:
-        print("No steps to move")
         return
 
     period_us = speed_to_period_us(speed_mm_s)
-
-    dir_pin.value(not direction)
-
-    print(f"Moving {steps} steps | speed={speed_mm_s} mm/s")
 
     rmt.loop_count(steps)
     rmt.write_pulses((PULSE_US, period_us - PULSE_US), 1)
@@ -439,6 +441,70 @@ def move_steps(steps, direction, speed_mm_s=DEFAULT_SPEED_MM_S):
     time.sleep_ms(move_time_ms)
 
     rmt.active(False)
+
+
+def _ramp_block(total_steps, v_from, v_to, segments):
+    # Generate the 'total_steps' while step scan: v_from -> v_to,
+    # Segments the small range with constant speed.
+    # Use v^2 liner with distance => constant accerleration (trapezoidal).
+    if total_steps <= 0:
+        return
+
+    segs = segments if segments < total_steps else total_steps
+    if segs < 1:
+        segs = 1
+
+    base  = total_steps // segs
+    extra = total_steps - base * segs
+
+    v_from2 = v_from * v_from
+    v_to2   = v_to * v_to
+
+    for i in range(segs):
+        frac = (i + 0.5) / segs
+        v = math.sqrt(v_from2 + (v_to2 - v_from2) * frac)
+
+        seg_steps = base + (1 if i < extra else 0)
+        _pulse_block(seg_steps, v)
+
+
+def move_steps(steps, direction, speed_mm_s=DEFAULT_SPEED_MM_S):
+
+    global position_steps
+
+    if steps <= 0:
+        print("No steps to move")
+        return
+
+    v_start  = START_SPEED_MM_S
+    v_cruise = speed_mm_s if speed_mm_s > v_start else v_start
+    accel    = ACCEL_MM_S2
+
+    # set chieu 1 lan cho ca hanh trinh
+    dir_pin.value(not direction)
+    time.sleep_us(20)
+
+    # The number of step need to speedup v_start -> v_cruise (and speed down)
+    accel_dist_mm = (v_cruise * v_cruise - v_start * v_start) / (2.0 * accel)
+    accel_steps   = int(accel_dist_mm * STEPS_PER_MM)
+
+    # Short range: v_cruise -> triangle profile
+    if accel_steps * 2 > steps:
+        accel_steps = steps // 2
+
+    decel_steps  = accel_steps
+    cruise_steps = steps - accel_steps - decel_steps
+
+    print(f"Move {steps} steps | cruise={v_cruise} mm/s | ramp={accel_steps} steps")
+
+    # ACCEL  : v_start -> v_cruise
+    _ramp_block(accel_steps, v_start, v_cruise, RAMP_SEGMENTS)
+
+    # CRUISE : giu v_cruise
+    _pulse_block(cruise_steps, v_cruise)
+
+    # DECEL  : v_cruise -> v_start (soft stop)
+    _ramp_block(decel_steps, v_cruise, v_start, RAMP_SEGMENTS)
 
     if direction == 1:
         position_steps += steps
